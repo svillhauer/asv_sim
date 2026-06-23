@@ -1,0 +1,19 @@
+# VRX workspace — 269MB of cloned + compiled VRX source.
+# Rebuild inside the container with: bash setup_vrx.sh
+vrx_ws/
+
+# ROS 2 build artifacts for asv_bridge
+ros_ws/build/
+ros_ws/install/
+ros_ws/log/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Build logs
+vrx_build.log
+
+# Claude Code local settings
+.claude/

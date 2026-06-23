@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <!-- Visual-only Slocum glider — no physics plugins.
+       Teleported each EKF tick by glider_viz_node. -->
+  <model name="glider_slocum">
+    <static>true</static>
+    <link name="base_link">
+      <visual name="body">
+        <geometry>
+          <mesh>
+            <uri>model://glider_slocum/mesh/Slocum-Glider.dae</uri>
+          </mesh>
+        </geometry>
+      </visual>
+      <visual name="propeller">
+        <geometry>
+          <mesh>
+            <uri>model://glider_slocum/mesh/Slocum-Glider-Propeller.dae</uri>
+          </mesh>
+        </geometry>
+      </visual>
+      <visual name="left_fin">
+        <geometry>
+          <mesh>
+            <uri>model://glider_slocum/mesh/Slocum-Glider-LeftFin.dae</uri>
+          </mesh>
+        </geometry>
+      </visual>
+      <visual name="right_fin">
+        <geometry>
+          <mesh>
+            <uri>model://glider_slocum/mesh/Slocum-Glider-RightFin.dae</uri>
+          </mesh>
+        </geometry>
+      </visual>
+      <visual name="rudder">
+        <geometry>
+          <mesh>
+            <uri>model://glider_slocum/mesh/Slocum-Glider-TopRudder.dae</uri>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+  </model>
+</sdf>
