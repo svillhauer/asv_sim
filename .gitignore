@@ -17,3 +17,7 @@ vrx_build.log
 
 # Claude Code local settings
 .claude/
+
+# Recorded bags and generated plots (large data files)
+bags/
+plots/

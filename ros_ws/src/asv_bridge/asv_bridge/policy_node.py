@@ -75,11 +75,19 @@ class PolicyNode(Node):
     # Training-env action scaling
     MAX_SURGE    = 2.5     # m/s
     MAX_YAW_RATE = 0.05    # rad/s
+    DT_TICK      = 300.0   # seconds per outer-loop step (matches training env dt)
 
     # Inner-loop controller gains (tune if WAM-V under/overshoots)
     KP_SURGE     = 500.0   # N / (m/s error)
     KI_SURGE     = 100.0   # N / (m/s · s) — integrates out drag
     KP_YAW       = 1000.0  # N·m / (rad/s error)
+    # Heading P-controller: maps heading error (rad) → desired yaw_rate (rad/s).
+    # The training env uses a single Euler step (pos += surge*dt*[cos(h0), sin(h0)]),
+    # so the boat effectively drives straight each step then snaps heading.  To match
+    # this in Gazebo: rotate to the target heading quickly (~5 sim-s), then drive
+    # straight for the remaining ~295 sim-s, giving ~surge*295 m net displacement.
+    KP_HEADING   = 2.0     # (rad/s) / rad — outer heading P gain
+    MAX_YAW_RATE_INNER = 0.5   # rad/s cap for heading controller output
 
     MAX_THRUST   = 1500.0  # N per thruster (VRX WAM-V max)
     CTRL_HZ      = 10.0    # inner-loop rate
@@ -115,8 +123,9 @@ class PolicyNode(Node):
             NavSatFix, "/wamv/sensors/gps/gps/fix",     self._gps_cb, 10)
 
         # Commanded velocities (set by outer loop, held until next tick)
-        self._surge_cmd   = 0.0   # m/s
-        self._yaw_cmd     = 0.0   # rad/s
+        self._surge_cmd      = 0.0   # m/s
+        self._yaw_cmd        = 0.0   # rad/s (stored for logging only)
+        self._target_heading = None  # desired heading (rad) to reach by end of step
 
         # Measured state (updated by sensor callbacks)
         self._yaw_rate    = 0.0   # rad/s  (IMU)
@@ -154,14 +163,25 @@ class PolicyNode(Node):
             self._surge_int = 0.0
 
         self._surge_cmd = new_surge
-        self._yaw_cmd   = new_yaw
+        self._yaw_cmd   = new_yaw   # stored for logging only
+
+        # Compute target heading: training env uses Euler integration so the boat
+        # moves surge*dt in the direction of heading at the START of each step, then
+        # the heading changes by yaw_rate*dt.  Replicate this in Gazebo by rotating
+        # to target_heading quickly (P controller), then driving straight.
+        yaw_total = new_yaw * self.DT_TICK   # total heading change this step (rad)
+        raw_target = self._heading + yaw_total
+        # normalise to (-π, π]
+        self._target_heading = (raw_target + math.pi) % (2 * math.pi) - math.pi
+
         self._step += 1
 
         self._pub_action.publish(_f32_msg(action))
         self.get_logger().info(
             f"step={self._step:4d}  "
             f"action=[{action[0]:+.3f}, {action[1]:+.3f}]  "
-            f"cmd=[{new_surge:+.2f} m/s, {new_yaw:+.4f} rad/s]"
+            f"cmd=[{new_surge:+.2f} m/s, {new_yaw:+.4f} rad/s]  "
+            f"tgt_hdg={math.degrees(self._target_heading):.1f}°"
         )
 
     # ── Sensor callbacks ───────────────────────────────────────────────
@@ -183,7 +203,7 @@ class PolicyNode(Node):
         x = (lon - lon0) * math.pi / 180.0 * _R_EARTH * math.cos(math.radians(lat0))
         y = (lat - lat0) * math.pi / 180.0 * _R_EARTH
 
-        now = self.get_clock().now().nanoseconds * 1e-9
+        now = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         if self._gps_pos is not None and self._gps_time is not None:
             dt = now - self._gps_time
             if dt > 0.01:
@@ -211,12 +231,28 @@ class PolicyNode(Node):
         ))
         f_surge = self.KP_SURGE * surge_err + self.KI_SURGE * self._surge_int
 
-        # Yaw-rate P
-        yaw_err = self._yaw_cmd - self._yaw_rate
+        # Heading P → yaw_rate P cascade controller.
+        # Outer loop: heading error → desired yaw_rate (capped).
+        # Inner loop: yaw_rate error → differential thrust.
+        # This makes the boat snap to the target heading in ~5 sim-s, then drive
+        # straight for the remaining ~295 sim-s — matching the training env's
+        # single Euler step (pos += surge * dt * [cos(h_start), sin(h_start)]).
+        if self._target_heading is not None:
+            heading_err = self._target_heading - self._heading
+            # wrap to (-π, π]
+            heading_err = (heading_err + math.pi) % (2 * math.pi) - math.pi
+            desired_yaw_rate = float(np.clip(
+                self.KP_HEADING * heading_err,
+                -self.MAX_YAW_RATE_INNER, self.MAX_YAW_RATE_INNER,
+            ))
+        else:
+            heading_err     = 0.0
+            desired_yaw_rate = 0.0
+
+        yaw_err = desired_yaw_rate - self._yaw_rate
         f_yaw   = self.KP_YAW * yaw_err
 
-        # Differential thrust
-        # left = surge_force - yaw_torque,  right = surge_force + yaw_torque
+        # Differential thrust: left = surge − yaw_torque, right = surge + yaw_torque
         left  = float(np.clip(f_surge - f_yaw, -self.MAX_THRUST, self.MAX_THRUST))
         right = float(np.clip(f_surge + f_yaw, -self.MAX_THRUST, self.MAX_THRUST))
 
@@ -229,6 +265,8 @@ class PolicyNode(Node):
                 f"ctrl: cmd=[{self._surge_cmd:+.2f} m/s, {self._yaw_cmd:+.4f} rad/s]  "
                 f"meas=[{self._surge_meas:+.2f} m/s, {self._yaw_rate:+.4f} rad/s]  "
                 f"hdg={math.degrees(self._heading):.1f}°  "
+                f"hdg_err={math.degrees(heading_err):.1f}°  "
+                f"des_yaw={desired_yaw_rate:+.3f} rad/s  "
                 f"L={left:.0f} R={right:.0f} N"
             )
 

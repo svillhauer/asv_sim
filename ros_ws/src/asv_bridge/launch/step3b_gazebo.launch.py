@@ -35,6 +35,7 @@ def generate_launch_description():
                 'vecnorm_pkl': LaunchConfiguration('vecnorm_pkl'),
                 'gazebo_mode': True,
                 'tick_period': LaunchConfiguration('tick_period'),
+                'use_sim_time': True,
             }],
             output='screen',
         ),
@@ -46,6 +47,7 @@ def generate_launch_description():
             name='asv_policy',
             parameters=[{
                 'actor_weights': LaunchConfiguration('actor_weights'),
+                'use_sim_time': True,
             }],
             output='screen',
         ),

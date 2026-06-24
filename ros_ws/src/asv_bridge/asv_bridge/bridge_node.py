@@ -65,6 +65,21 @@ class BridgeNode(Node):
         obs = self._core.reset(seed=seed)
         self.get_logger().info(f"EkfCore initialised  seed={seed}  obs[:4]={obs[:4]}")
 
+        # In Gazebo mode, GPS always reports the boat at (0,0) on first fix.
+        # Shift all EkfCore positions so the ASV starts at the GPS origin,
+        # keeping glider positions in the same relative frame as kinematic mode.
+        if self.get_parameter("gazebo_mode").value:
+            asv_init = self._core.asv_pos.copy()
+            self._core.g1_pos   -= asv_init
+            self._core.g2_pos   -= asv_init
+            self._core.g1_x[0:2] -= asv_init
+            self._core.g2_x[0:2] -= asv_init
+            self._core.asv_pos   = np.zeros(2, dtype=np.float32)
+            self.get_logger().info(
+                f"Gazebo origin shift applied: asv_init={asv_init}  "
+                f"g1_pos={self._core.g1_pos}  g2_pos={self._core.g2_pos}"
+            )
+
         # VecNormalize — try .npz first (no SB3 needed), fall back to pkl
         self._vec_mean = None
         self._vec_var  = None
@@ -152,8 +167,9 @@ class BridgeNode(Node):
                 f"GPS reference set: lat={lat:.6f}  lon={lon:.6f}"
             )
         lat0, lon0 = self._gps_ref
-        self._gz_pos[0] = (lat - lat0) * math.pi / 180.0 * _R_EARTH
-        self._gz_pos[1] = (lon - lon0) * math.pi / 180.0 * _R_EARTH * math.cos(math.radians(lat0))
+        # ENU: East = pos[0], North = pos[1] — matches EkfCore dynamics (heading=0 → +East)
+        self._gz_pos[0] = (lon - lon0) * math.pi / 180.0 * _R_EARTH * math.cos(math.radians(lat0))
+        self._gz_pos[1] = (lat - lat0) * math.pi / 180.0 * _R_EARTH
         self._gps_ready = True
 
     def _imu_callback(self, msg: Imu):
